@@ -8,14 +8,50 @@ from typing import Any
 import requests
 import streamlit as st
 from faster_whisper import WhisperModel
-from keybert import KeyBERT
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 
 MODEL_SIZE = "base"
 TRANSCRIPT_KEY = "transcript_path"
 SUBMISSION_KEY = "latest_submission"
 TOPIC_MODEL_NAME = "all-MiniLM-L6-v2"
+SENTIMENT_MODEL_NAME = "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
+SENTIMENT_WORDS = {
+    "amazing",
+    "awful",
+    "bad",
+    "broken",
+    "cheap",
+    "confusing",
+    "delayed",
+    "difficult",
+    "easy",
+    "excellent",
+    "expensive",
+    "fantastic",
+    "fast",
+    "frustrating",
+    "friendly",
+    "good",
+    "great",
+    "hard",
+    "helpful",
+    "horrible",
+    "late",
+    "negative",
+    "poor",
+    "positive",
+    "quick",
+    "reliable",
+    "responsive",
+    "rude",
+    "slow",
+    "smooth",
+    "terrible",
+    "unhelpful",
+    "unreliable",
+    "uncomfortable",
+    "wonderful",
+}
 
 
 @st.cache_resource(show_spinner="Loading speech recognition model...")
@@ -24,13 +60,21 @@ def load_whisper_model() -> WhisperModel:
 
 
 @st.cache_resource(show_spinner="Loading local topic analysis model...")
-def load_topic_model() -> KeyBERT:
+def load_topic_model() -> Any:
+    from keybert import KeyBERT
+
     return KeyBERT(model=TOPIC_MODEL_NAME)
 
 
-@st.cache_resource
-def load_sentiment_analyzer() -> SentimentIntensityAnalyzer:
-    return SentimentIntensityAnalyzer()
+@st.cache_resource(show_spinner="Loading local sentiment analysis model...")
+def load_sentiment_analyzer() -> Any:
+    from transformers import pipeline
+
+    return pipeline(
+        "sentiment-analysis",
+        model=SENTIMENT_MODEL_NAME,
+        device=-1,
+    )
 
 
 def split_feedback_clauses(transcript: str) -> list[str]:
@@ -60,33 +104,48 @@ def analyze_feedback_topics(transcript: str) -> list[dict[str, str]]:
         top_n=8,
     )
     sentiment_analyzer = load_sentiment_analyzer()
-    topics: list[dict[str, str]] = []
-    seen_topics: list[str] = []
+    topic_candidates: list[tuple[str, float, list[str]]] = []
 
-    for keyword, _ in keywords:
-        normalized_keyword = normalize_topic_text(keyword)
-        if not normalized_keyword or any(
-            normalized_keyword == topic
-            or normalized_keyword in topic.split()
-            or topic in normalized_keyword.split()
-            for topic in seen_topics
-        ):
+    for keyword, relevance in keywords:
+        topic = " ".join(
+            word
+            for word in normalize_topic_text(keyword).split()
+            if word not in SENTIMENT_WORDS
+        )
+        if not topic:
             continue
 
         matching_clauses = [
             clause
             for clause in clauses
-            if f" {normalized_keyword} " in f" {normalize_topic_text(clause)} "
+            if f" {topic} " in f" {normalize_topic_text(clause)} "
         ]
-        if not matching_clauses:
-            continue
+        if matching_clauses:
+            topic_candidates.append((topic, relevance, matching_clauses))
 
+    topic_candidates.sort(
+        key=lambda candidate: (len(candidate[0].split()), candidate[1]),
+        reverse=True,
+    )
+    topics: list[dict[str, str]] = []
+    seen_topics: list[str] = []
+
+    for topic, _, matching_clauses in topic_candidates:
+        if any(f" {topic} " in f" {seen} " for seen in seen_topics):
+            continue
         sentiment_labels: set[str] = set()
         for clause in matching_clauses:
-            score = sentiment_analyzer.polarity_scores(clause)["compound"]
-            if score >= 0.05:
+            result = sentiment_analyzer(
+                clause,
+                truncation=True,
+                max_length=512,
+            )[0]
+            label = result["label"].casefold()
+            if result["score"] < 0.65:
+                sentiment_labels.add("Neutral")
+            elif "positive" in label:
                 sentiment_labels.add("Positive")
-            elif score <= -0.05:
+            elif "negative" in label:
                 sentiment_labels.add("Negative")
             else:
                 sentiment_labels.add("Neutral")
@@ -102,12 +161,12 @@ def analyze_feedback_topics(transcript: str) -> list[dict[str, str]]:
         description = " ".join(f'"{clause}"' for clause in matching_clauses[:3])
         topics.append(
             {
-                "Topic": keyword,
+                "Topic": topic,
                 "Sentiment": sentiment,
                 "Description": description,
             }
         )
-        seen_topics.append(normalized_keyword)
+        seen_topics.append(topic)
         if len(topics) == 5:
             break
 
@@ -160,8 +219,9 @@ def main() -> None:
         "recordings are not retained."
     )
     st.caption(
-        "The first voice analysis downloads a local topic model. "
-        "Audio and transcripts are not sent to a cloud AI service."
+        "The first voice analysis downloads local analysis models. "
+        "Semantic analysis is optimized for English. Audio and transcripts "
+        "are not sent to a cloud AI service."
     )
 
     if st.button("Clear this session's feedback"):

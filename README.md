@@ -21,12 +21,12 @@ download and is removed when you clear the session. Temporary files may also be
 removed by the operating system.
 
 On the first voice submission, KeyBERT may download the
-`all-MiniLM-L6-v2` embedding model. It extracts up to five topics locally;
-VADER's local sentiment lexicon assigns positive, negative, neutral, or mixed
-sentiment to the matching spoken clauses. Each topic's description is quoted
-from the transcript rather than generated, so the overview stays grounded in
-the speaker's words. Audio and transcript analysis are not sent to a cloud AI
-service.
+`all-MiniLM-L6-v2` embedding model and the DistilBERT sentiment model. Topic
+extraction and sentiment classification both run locally on CPU. The overview
+shows up to five topics with positive, negative, neutral, or mixed sentiment;
+each description quotes the matching spoken clauses rather than generating
+new text. Audio and transcript analysis are not sent to a cloud AI service.
+The analysis models are English-language models.
 
 If you already installed the app before changing dependencies, update the
 environment with `python -m pip install -r requirements.txt` before restarting
